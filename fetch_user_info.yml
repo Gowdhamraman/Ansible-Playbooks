@@ -1,71 +1,45 @@
 ---
-- name: Fetch user and group details across cluster
+- name: Fetch user and group details for given user across cluster
   hosts: all
   become: yes
   gather_facts: no
+
   vars:
-    username: ""   # empty by default — must specify on runtime to fetch single user
+    username: ""
 
   tasks:
-    - name: Decide what to fetch based on username variable
-      set_fact:
-        fetch_all_users: "{{ username == '' }}"
+    - name: Fail if username is not provided
+      fail:
+        msg: "You must provide a username to fetch info. Example: -e 'username=johndoe'"
+      when: username == ""
 
-    - name: Fetch all users if no username specified
-      shell: "cut -d: -f1 /etc/passwd"
-      register: all_users
-      when: fetch_all_users
+    - name: Check if user exists
+      command: id {{ username }}
+      register: user_info
+      ignore_errors: yes
 
-    - name: Show list of users found (if fetching all users)
+    - name: Fetch passwd entry if user exists
+      command: getent passwd {{ username }}
+      register: passwd_info
+      when: user_info.rc == 0
+      ignore_errors: yes
+
+    - name: Fetch group entry if user exists
+      command: getent group {{ username }}
+      register: group_info
+      when: user_info.rc == 0
+      ignore_errors: yes
+
+    - name: Show user info if found
       debug:
         msg:
           - "Host: {{ inventory_hostname }}"
-          - "Users on this host: {{ all_users.stdout_lines }}"
-      when: fetch_all_users
+          - "User info: {{ user_info.stdout }}"
+          - "Passwd entry: {{ passwd_info.stdout | default('N/A') }}"
+          - "Group entry: {{ group_info.stdout | default('N/A') }}"
+      when: user_info.rc == 0
 
-    - name: Loop through all users and get their info (if fetching all users)
-      command: id {{ item }}
-      register: user_ids
-      with_items: "{{ all_users.stdout_lines }}"
-      when: fetch_all_users
-      ignore_errors: yes
-
-    - name: Show user info for all users (if fetching all users)
+    - name: Show user not found
       debug:
-        msg: "{{ item.item }}: {{ item.stdout }}"
-      loop: "{{ user_ids.results }}"
-      when: fetch_all_users
-
-    - name: Fetch info for specific user if username specified
-      block:
-        - name: Check if user exists
-          command: id {{ username }}
-          register: user_info
-          ignore_errors: yes
-
-        - name: Fetch passwd entry if user exists
-          command: getent passwd {{ username }}
-          register: passwd_info
-          when: user_info.rc == 0
-          ignore_errors: yes
-
-        - name: Fetch group entry if user exists
-          command: getent group {{ username }}
-          register: group_info
-          when: user_info.rc == 0
-          ignore_errors: yes
-
-        - name: Show user info if found
-          debug:
-            msg:
-              - "Host: {{ inventory_hostname }}"
-              - "User info: {{ user_info.stdout }}"
-              - "Passwd entry: {{ passwd_info.stdout | default('N/A') }}"
-              - "Group entry: {{ group_info.stdout | default('N/A') }}"
-          when: user_info.rc == 0
-
-        - name: Show user not found
-          debug:
-            msg: "Host: {{ inventory_hostname }} - User '{{ username }}' not found"
-          when: user_info.rc != 0
-      when: not fetch_all_users
+        msg: "Host: {{ inventory_hostname }} - User '{{ username }}' not found"
+      when: user_info.rc != 0
